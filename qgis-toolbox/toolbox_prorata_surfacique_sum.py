@@ -12,7 +12,7 @@ Usage:
 # Copyright (c) 2025 Matthieu Lambert
 # Author: Matthieu Lambert
 # GitHub: https://github.com/Mothraa
-# Issues: https://github.com/votre-utilisateur/nom-du-repo/issues
+# Issues: https://github.com/Mothraa/gis-tools/issues
 # Date: 2025-08-31
 # Version: 0.1.0
 # QGIS-Compatibility: QGIS 3.16+ (tested on 3.40)
