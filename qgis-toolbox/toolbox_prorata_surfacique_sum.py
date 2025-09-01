@@ -15,10 +15,10 @@ Usage:
 # Issues: https://github.com/Mothraa/gis-tools/issues
 # Date: 2025-08-31
 # Version: 0.1.0
-# QGIS-Compatibility: QGIS 3.16+ (tested on 3.40)
+# QGIS-Compatibility: QGIS 3.36+ (tested on 3.40)
 # License: MIT (see LICENSE.md)
 
-from qgis.PyQt.QtCore import QCoreApplication, QVariant # type: ignore
+from qgis.PyQt.QtCore import QCoreApplication, QMetaType # type: ignore
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
@@ -106,7 +106,7 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
         self._safe_push_info(feedback, "Création de l’index spatial en mémoire...")
         index = QgsSpatialIndex()
         for f in layer.getFeatures():
-            index.insertFeature(f)
+            index.addFeature(f)
         return index
 
     def prepareOutputFields(self, input_layer, fields_to_prorate):
@@ -118,7 +118,10 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
             # verifie si le champ existe déjà
             if output_fields.indexFromName(field_name) == -1:
                 # création du champ
-                output_fields.append(QgsField(field_name, QVariant.Double, len=10, prec=5))
+                field = QgsField(field_name, QMetaType.Type.Double)
+                field.setLength(10)
+                field.setPrecision(5)
+                output_fields.append(field)
         return output_fields
 
     def _safe_push_info(self, feedback: QgsProcessingFeedback | None, message: str) -> None:
@@ -142,6 +145,26 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
             return False
         except Exception:
             return False
+
+    def _safe_float(self, value) -> float:
+        """Convert any attribute value to float"""
+        if value is None:
+            return 0.0
+        # cas int => float
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+        # cas QVariant
+        try:
+            return float(value.toDouble()[0])
+        except (AttributeError, TypeError, ValueError):
+            pass
+        # cas string avec ','
+        try:
+            return float(str(value).replace(",", "."))
+        except (ValueError, TypeError):
+            return 0.0
 
     def computeProrata(
         self,
@@ -205,27 +228,10 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
             inter_area = inter.geometry().area()  # Surface totale de l'entité intersectante
 
             if inter_area > 0:
-                # Pour chaque champ, conversion en float et calcul du prorata
-                # TODO : a refacto
                 for field in fields_to_prorate:
-                    raw = inter.attribute(field)  # obtenir la valeur d'attribut (type natif si possible)
-                    if raw is None:
-                        num = 0.0
-                    else:
-                        try:
-                            num = float(raw)
-                        except Exception:
-                            # cas d'un QVariant
-                            try:
-                                num = float(raw.toDouble()[0])
-                            except Exception:
-                            # cas d'une string avec ','
-                                try:
-                                    num = float(str(raw).replace(",", "."))
-                                except Exception:
-                                    # si toujours NOK...
-                                    num = 0.0
-                    prorata_values[field] += num * area / inter_area
+                    raw_value = inter.attribute(field) # valeur de l'attribut
+                    field_value = self._safe_float(raw_value) # conversion en float
+                    prorata_values[field] += field_value * area / inter_area
 
         return prorata_values
 
@@ -262,7 +268,8 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
 
         input_layer = self.parameterAsSource(parameters, self.INPUT, context)
         inter_layer = self.parameterAsSource(parameters, self.INTERSECT, context)
-        fields_to_prorate = self.parameterAsFields(parameters, self.FIELDS, context)
+        fields_to_prorate = self.parameterAsStrings(parameters, self.FIELDS, context)
+        # fields_to_prorate = self.parameterAsFields(parameters, self.FIELDS, context)
 
         if input_layer is None or inter_layer is None:
             raise QgsProcessingException("Impossible de charger la couche principale ou intersectante.")
