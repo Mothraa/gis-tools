@@ -1,24 +1,28 @@
 # -*- coding: utf-8 -*-
 """
+======================================================
 Area-weighted Sum - Prorata surfacique (somme)
-compute Area-weighted sums of fields from an intersecting polygon layer.
+======================================================
+
+Compute area-weighted sums of fields from an intersecting polygon layer.
 
 Usage:
-    - To load as a QGIS Processing script (toolbox)
-    - See README.md and LICENSE.md for usage and license
+    - Load as a QGIS Processing script (toolbox)
 
+──────────────────────────────────────────────────────
+SPDX-License-Identifier: MIT
+Copyright (c) 2025 Matthieu Lambert
+Author: Matthieu Lambert
+GitHub: https://github.com/Mothraa
+Issues: https://github.com/Mothraa/gis-tools/issues
+Date: 2025-08-31
+Version: 0.1.0
+QGIS-Compatibility: QGIS 3.36+ (tested on 3.40)
+License: MIT (see LICENSE.md)
+──────────────────────────────────────────────────────
 """
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Matthieu Lambert
-# Author: Matthieu Lambert
-# GitHub: https://github.com/Mothraa
-# Issues: https://github.com/Mothraa/gis-tools/issues
-# Date: 2025-08-31
-# Version: 0.1.0
-# QGIS-Compatibility: QGIS 3.36+ (tested on 3.40)
-# License: MIT (see LICENSE.md)
 
-from qgis.PyQt.QtCore import QCoreApplication, QMetaType # type: ignore
+from qgis.PyQt.QtCore import QCoreApplication, QMetaType  # type: ignore
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
@@ -28,7 +32,9 @@ from qgis.core import (
     QgsProcessingFeatureSource,
     QgsFeature,
     QgsField,
-    QgsProcessingException, # type: ignore
+    QgsVectorLayer,
+    QgsGeometry,
+    QgsProcessingException,  # type: ignore
     QgsProcessingFeedback,
     QgsFeatureSink,
     QgsSpatialIndex,
@@ -64,7 +70,7 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return self.tr(
-            "Calcule un prorata surfacique (somme)"
+            "Calcule un prorata surfacique (somme) "
             "d'une couche intersectante polygonale (ex : données statistiques au bâti, à l'IRIS,...) "
             "sur une couche principale polygonale (ex : zone de chalandise).\n"
             "Plusieurs champs peuvent être traités en même temps.\n"
@@ -74,9 +80,9 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
             "chevauchent partiellement ou totalement.\n"
             "  • Il calcule la géométrie exacte de cette intersection.\n"
             "  • Les valeurs des champs choisis sont redistribuées proportionnellement "
-            "à la surface intersectée (valeur * surface_intersection / surface_totale_intersectant).\n \n"
+            "à la surface intersectée (valeur * surface_intersection / surface_totale_intersectant).\n\n"
             "En sortie :\n"
-            "  • une couche principale enrichie avec la somme des champs proratisés (suffix '_prorata'),\n"
+            "  • une couche principale enrichie avec la somme des champs proratisés (suffix '_prorata'),"
         )
 
     def initAlgorithm(self, configuration=None):
@@ -112,7 +118,6 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
     def prepareOutputFields(self, input_layer, fields_to_prorate):
         """ create proratized fields """
         output_fields = input_layer.fields()
-
         for f in fields_to_prorate:
             field_name = f"{f}_prorata"
             # verifie si le champ existe déjà
@@ -124,8 +129,41 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
                 output_fields.append(field)
         return output_fields
 
+    def get_intersecting_features(
+        self,
+        layer: QgsVectorLayer,
+        fids: list[int],
+        geom: QgsGeometry
+    ) -> list[QgsFeature]:
+        """
+        Retrieve features from a 'layer' that match feature IDs and intersect 'geom'.
+
+        Args:
+            layer: The vector layer from which to retrieve features.
+            fids: List of feature IDs to filter in the layer. If empty, the function returns an empty list.
+            geom: The geometry used for intersections.
+
+        Returns:
+            Features intersecting the provided geometry and matching the given IDs.
+        """
+        if not fids:
+            return []
+
+        request = QgsFeatureRequest().setFilterFids(fids)
+        intersecting_feats = []
+
+        for feat in layer.getFeatures(request):  # type: ignore
+            geom_cand = feat.geometry()
+            if geom_cand is None:
+                continue
+            if geom_cand.intersects(geom):
+                # copie de la feature pour la conserver
+                intersecting_feats.append(QgsFeature(feat))
+
+        return intersecting_feats
+
     def _safe_push_info(self, feedback: QgsProcessingFeedback | None, message: str) -> None:
-        """Safely push an info message to feedback"""
+        """push an info message to feedback"""
         if feedback is None:
             return
         try:
@@ -136,7 +174,7 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
             return
 
     def _safe_is_canceled(self, feedback: QgsProcessingFeedback | None) -> bool:
-        """Check if user want to cancel script execution"""
+        """when user want to cancel script execution"""
         if feedback is None:
             return False
         try:
@@ -146,6 +184,7 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
         except Exception:
             return False
 
+    # TODO : fonctions utilitaires a sortir de la class
     def _safe_float(self, value) -> float:
         """Convert any attribute value to float"""
         if value is None:
@@ -197,41 +236,29 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
 
         # Intersection sur les bbox des entités pour optimisation des perfs
         inter_ids = spatial_index.intersects(geom.boundingBox())
-        intersecting_feats = []
-
-        if inter_ids:
-            request = QgsFeatureRequest().setFilterFids(inter_ids)
-            feature_iter = inter_layer.getFeatures(request)
-            if feature_iter is not None:
-                candidate_feat = QgsFeature()
-                # nextFeature remplit candidate_feat et renvoie True tant qu'il y a des entités
-                while feature_iter.nextFeature(candidate_feat):
-                    # vérification de la géométrie et de l'intersection réelle
-                    if candidate_feat.geometry() is not None and candidate_feat.geometry().intersects(geom):
-                        # copie la feature pour la conserver
-                        intersecting_feats.append(QgsFeature(candidate_feat))
-        else:
-            intersecting_feats = []
+        intersecting_feats = self.get_intersecting_features(inter_layer, inter_ids, geom)
 
         # Init à 0 des champs proratisés
         prorata_values = {f: 0.0 for f in fields_to_prorate}
 
         # Bouclage sur les entités intersectées
         for inter in intersecting_feats:
-            # Calcul de l'intersection géométrique exacte
             inter_geom = inter.geometry().intersection(geom)
-            # Ignorer si intersection vide => cas spécifique, ne devrait pas se produire vu verif préalable
-            if inter_geom is None or inter_geom.isEmpty():
+
+            # cas à ignorer (si intersect vide, cas spécifique, ne devrait pas se produire vu verif préalable)
+            if not inter_geom or inter_geom.isEmpty():
+                continue
+
+            inter_area = inter.geometry().area()  # Surface totale de l'entité intersectante
+            if inter_area <= 0:
                 continue
 
             area = inter_geom.area()  # Surface de l'intersection
-            inter_area = inter.geometry().area()  # Surface totale de l'entité intersectante
 
-            if inter_area > 0:
-                for field in fields_to_prorate:
-                    raw_value = inter.attribute(field) # valeur de l'attribut
-                    field_value = self._safe_float(raw_value) # conversion en float
-                    prorata_values[field] += field_value * area / inter_area
+            # Calcul prorata pour chaque champ
+            for field in fields_to_prorate:
+                field_value = self._safe_float(inter.attribute(field))  # conversion en float
+                prorata_values[field] += field_value * area / inter_area
 
         return prorata_values
 
@@ -263,17 +290,24 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
         self, parameters,
         context: QgsProcessingContext,
         feedback: QgsProcessingFeedback | None
-        ):
+    ):
         """ main processing """
 
+        # Récupération des couches
         input_layer = self.parameterAsSource(parameters, self.INPUT, context)
         inter_layer = self.parameterAsSource(parameters, self.INTERSECT, context)
-        fields_to_prorate = self.parameterAsStrings(parameters, self.FIELDS, context)
-        # fields_to_prorate = self.parameterAsFields(parameters, self.FIELDS, context)
 
         if input_layer is None or inter_layer is None:
             raise QgsProcessingException("Impossible de charger la couche principale ou intersectante.")
 
+        # on s'assure que getFeatures renvoie toujours un itérable
+        input_features = list(input_layer.getFeatures())
+        inter_features = list(inter_layer.getFeatures())
+
+        if not input_features or not inter_features:
+            raise QgsProcessingException("La couche principale ou intersectante ne contient aucune entité.")
+
+        fields_to_prorate = self.parameterAsStrings(parameters, self.FIELDS, context)
         self._safe_push_info(feedback, f"Champs à proratiser : {fields_to_prorate}")
 
         spatial_index = self.buildSpatialIndex(inter_layer, feedback)
@@ -281,7 +315,7 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
 
         sink, dest_id = self.parameterAsSink(
             parameters, self.OUTPUT, context, output_fields, input_layer.wkbType(), input_layer.sourceCrs()
-                        )
+        )
         if sink is None:
             raise QgsProcessingException("Impossible de créer la couche de sortie.")
 
@@ -289,7 +323,6 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
         total_features = input_layer.featureCount()
         # last_progress : pour éviter les répétitions dans le log, a améliorer a l'occasion mais fait le job...
         last_progress = -1
-        finalization_message_displayed = False
 
         for i, feat in enumerate(input_layer.getFeatures()):
             # Protéger isCanceled si feedback est None
@@ -306,16 +339,21 @@ class ProrataSurfacique(QgsProcessingAlgorithm):
 
             nb_entites += 1
 
-            # Affichage d'avancement tous les multiples de 10 %
-            progress_percent = int((i + 1) / total_features * 100)
+            # progression
+            progress_percent = round((i + 1) / total_features * 100)
+            # TODO : a mettre dans une fonction utilitaire
+            if feedback is not None:
+                feedback.setProgress(progress_percent)
+
+            # push info uniquement aux multiples de 10
             if progress_percent % 10 == 0 and progress_percent != last_progress:
                 self._safe_push_info(feedback, f"{progress_percent}% des entités traitées...")
                 last_progress = progress_percent
 
             # affichage un message de finalisation une fois les 100% atteint
-            if progress_percent == 100 and not finalization_message_displayed:
+            # TODO : a DEBUG, ne s'affiche pas au bon moment
+            if i + 1 == total_features:
                 self._safe_push_info(feedback, "Finalisation du traitement en cours...")
-                finalization_message_displayed = True
 
         self._safe_push_info(feedback, f"Traitement finalisé : {nb_entites} entités traitées")
         return {self.OUTPUT: dest_id}
